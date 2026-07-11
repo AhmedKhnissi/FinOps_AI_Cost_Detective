@@ -19,7 +19,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ai_analyzer import AIAnalyzerError, analyze_resources  # noqa: E402
+from auth import authenticate_user, create_user, get_current_user  # noqa: E402
 from azure_scanner import AzureCLIError, list_resource_groups, scan_resource_group  # noqa: E402
 from db import (  # noqa: E402
     create_analysis,
@@ -105,9 +106,11 @@ class AnalyzeRequest(BaseModel):
     )
 
 
-def _user_email(x_user_email: Optional[str]) -> str:
-    """Resolve the acting user; falls back to a demo user when no auth header."""
-    return (x_user_email or "").strip() or "demo@example.com"
+class AuthRequest(BaseModel):
+    """Request body for ``POST /api/auth/signup`` and ``/api/auth/login``."""
+
+    email: str = Field(..., min_length=3, description="User email (used as the login identity).")
+    password: str = Field(..., min_length=6, description="Password (min 6 characters).")
 
 
 @app.get("/")
@@ -119,8 +122,28 @@ def root() -> dict:
     }
 
 
+@app.post("/api/auth/signup")
+def signup(request: AuthRequest):
+    """Register a new user (bcrypt-hashed password) and return a JWT (step ①)."""
+    if "@" not in request.email or " " in request.email.strip():
+        raise HTTPException(status_code=422, detail="A valid email address is required.")
+    try:
+        create_user(request.email, request.password)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    token = create_token(request.email.strip().lower())
+    return {"token": token, "email": request.email.strip().lower()}
+
+
+@app.post("/api/auth/login")
+def login(request: AuthRequest):
+    """Validate credentials and return a JWT (step ①)."""
+    token = authenticate_user(request.email, request.password)
+    return {"token": token, "email": request.email.strip().lower()}
+
+
 @app.get("/api/resource-groups")
-def get_resource_groups() -> dict:
+def get_resource_groups(current_user: str = Depends(get_current_user)) -> dict:
     """List every Azure resource group (step ②: user picks one)."""
     try:
         groups = list_resource_groups()
@@ -132,7 +155,7 @@ def get_resource_groups() -> dict:
 @app.post("/api/analyze")
 async def analyze(
     request: AnalyzeRequest,
-    x_user_email: Optional[str] = Header(default=None),
+    current_user: str = Depends(get_current_user),
 ):
     """Scan a resource group, run the AI cost analysis, persist it, and stream progress.
 
@@ -143,7 +166,7 @@ async def analyze(
     if not resource_group:
         raise HTTPException(status_code=422, detail="resource_group must not be empty.")
 
-    email = _user_email(x_user_email)
+    email = current_user
     user_id = await run_in_threadpool(get_or_create_user, email)
     analysis_id = request.analysis_id or str(uuid.uuid4())
     await run_in_threadpool(create_analysis, analysis_id, user_id, resource_group)
@@ -186,9 +209,9 @@ async def analyze(
 
 
 @app.get("/api/history")
-async def history(x_user_email: Optional[str] = Header(default=None)):
+async def history(current_user: str = Depends(get_current_user)):
     """Return past analyses for the authenticated user, newest first."""
-    email = _user_email(x_user_email)
+    email = current_user
     rows = await run_in_threadpool(get_user_analyses, email)
     return {"analyses": rows, "count": len(rows)}
 

@@ -11,3 +11,9 @@ psycopg2-binary==2.9.12
 # ── Live progress (step ④ WebSocket) ────────────────────────────────────────
 # Starlette's WebSocket transport needs one of these installed.
 websockets==16.0.0
+
+# ── Auth (step ① Custom JWT) ────────────────────────────────────────────────
+# PyJWT issues/verifies the signed tokens; bcrypt hashes the passwords we
+# store in the `users` table. `bcrypt` 5.x exposes the PasswordHasher API.
+PyJWT==2.13.0
+bcrypt==5.0.0

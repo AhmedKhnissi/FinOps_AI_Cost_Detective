@@ -124,6 +124,77 @@ def _putconn(conn) -> None:
             pass
 
 
+class UserExistsError(Exception):
+    """Raised by :func:`register_user` when the email is already registered."""
+
+
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
+    """Return the user row for ``email`` (incl. ``password_hash``), or ``None``."""
+    conn = _getconn()
+    if conn is None or not email:
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, email, password_hash FROM users WHERE email = %s;",
+                (email,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                return None
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+    except Exception as exc:
+        print(f"[db] get_user_by_email failed: {exc}")
+        return None
+    finally:
+        _putconn(conn)
+
+
+def register_user(email: str, password_hash: str) -> int:
+    """Create (or upgrade) a user and return their id.
+
+    A bare ``email`` row may already exist as a legacy demo user (its
+    ``password_hash`` is NULL). If so we backfill the password instead of
+    rejecting the signup. If the email already has a password we treat it as a
+    duplicate account and raise :class:`UserExistsError`.
+    """
+    conn = _getconn()
+    if conn is None:
+        raise RuntimeError("Database unavailable — cannot register user.")
+    email = email.strip().lower()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, password_hash FROM users WHERE email = %s;", (email,))
+            existing = cur.fetchone()
+            if existing is not None and existing[1] is not None:
+                raise UserExistsError(email)
+            if existing is not None:
+                cur.execute(
+                    "UPDATE users SET password_hash = %s WHERE id = %s;",
+                    (password_hash, existing[0]),
+                )
+                user_id = existing[0]
+            else:
+                cur.execute(
+                    "INSERT INTO users (email, password_hash) VALUES (%s, %s) "
+                    "RETURNING id;",
+                    (email, password_hash),
+                )
+                user_id = cur.fetchone()[0]
+            conn.commit()
+            return user_id
+    except UserExistsError:
+        conn.rollback()
+        raise
+    except Exception as exc:
+        conn.rollback()
+        print(f"[db] register_user failed: {exc}")
+        raise RuntimeError("Could not register user.") from exc
+    finally:
+        _putconn(conn)
+
+
 def get_or_create_user(email: str) -> Optional[int]:
     """Return the user id for ``email``, creating the row on first sight."""
     conn = _getconn()
