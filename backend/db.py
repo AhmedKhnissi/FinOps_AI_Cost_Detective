@@ -24,7 +24,8 @@ from typing import Any, Dict, List, Optional
 
 try:
     import psycopg2
-    from psycopg2.extras import Json, ThreadedConnectionPool
+    from psycopg2.extras import Json
+    from psycopg2.pool import ThreadedConnectionPool
 except ImportError:  # pragma: no cover - dependency guard
     psycopg2 = None  # type: ignore
 
@@ -87,12 +88,18 @@ def init_db() -> None:
         return
     try:
         _pool = ThreadedConnectionPool(minconn=1, maxconn=10, dsn=url)
-        with _pool.getconn() as conn:
+        # NOTE: a pooled connection is a context manager whose __exit__ calls
+        # conn.close() (not putconn), so we must return it explicitly or the
+        # pool permanently loses the slot and exhausts under load.
+        conn = _pool.getconn()
+        try:
             with conn.cursor() as cur:
                 cur.execute(CREATE_USERS)
                 cur.execute(CREATE_ANALYSES)
                 cur.execute(CREATE_INDEX)
             conn.commit()
+        finally:
+            _pool.putconn(conn)
         DB_AVAILABLE = True
         print("[db] Connected to PostgreSQL; tables ready.")
     except Exception as exc:  # connection refused, bad URL, auth failure, etc.

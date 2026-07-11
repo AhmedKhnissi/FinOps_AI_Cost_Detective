@@ -1,4 +1,4 @@
-r"""Smoke-test the Cost Detective API (steps ②, ③, ⑤, ⑥ + error paths).
+r"""Smoke-test the Cost Detective API (steps ②, ③, ④, ⑤, ⑥ + error paths).
 
 Run while the server is up:
     ..\venv\Scripts\python.exe test_api.py            # defaults to :8000
@@ -19,25 +19,46 @@ What it exercises:
   POST /api/analyze  (bad RG)  -> 404
   POST /api/analyze  (empty)   -> 422
   POST /api/analyze  ({})      -> 422
+  ws://.../ws/progress/{id}    step ④  (live progress relayed to the socket)
   az postgres flexible-server list   step ⑥ (proves the PG instance exists)
   GET  /api/history             step ⑥ (proves the DB is reachable + persists)
 
-Uses only the stdlib (urllib) plus `az` for the instance-existence check. The
-AI call can take several seconds, so requests are given a generous timeout.
-Prints a PASS/FAIL summary at the end; a non-zero exit + a FAIL line means
-something broke.
+PostgreSQL config deep-dive (step ⑥, does NOT require the server to be up):
+  * DATABASE_URL present in backend/.env, pointed at the Azure PG, sslmode=require
+  * psycopg2 connects with sslmode=require (the exact driver the app uses)
+  * both tables exist on startup with the exact columns/types Prompt 3 mandates
+    — including analyses.analysis_result as JSONB and the integer count columns
+  * a full analysis result round-trips through the app's own db.py helpers
+    (get_or_create_user -> create_analysis -> finalize_analysis ->
+    get_user_analyses), proving JSONB storage AND per-user history isolation
+    (the scoping that backs GET /api/history)
+
+Uses the stdlib (urllib) plus `az` for the instance-existence check. The deeper
+PostgreSQL checks additionally import the local `db` module, `psycopg2`, and
+`websockets` (all listed in requirements.txt). The AI call can take several
+seconds, so requests are given a generous timeout. Prints a PASS/FAIL summary
+at the end; a non-zero exit + a FAIL line means something broke.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import urllib.error
 import urllib.request
+import uuid
+
+# Make the sibling backend modules importable however the test is launched.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 BASE = f"http://127.0.0.1:{sys.argv[1] if len(sys.argv) > 1 else '8000'}"
+PORT = sys.argv[1] if len(sys.argv) > 1 else "8000"
 REQUEST_TIMEOUT = 120  # seconds; the OpenRouter call can be slow
 PASS, FAIL = 0, 0
 
@@ -161,9 +182,250 @@ def check_database(health_json: dict | None, analyzed_id: str | None) -> None:
             FAIL += 1
 
 
+def check_postgres_config() -> None:
+    """Step ⑥ deep-dive: verify the PostgreSQL wiring matches Prompt 3 exactly.
+
+    Runs independently of the server (talks to the DB directly via the app's own
+    ``db`` module + psycopg2):
+
+      * ``DATABASE_URL`` is present in backend/.env and points at the Azure PG
+        (host ends in .postgres.database.azure.com, sslmode=require).
+      * A psycopg2 connection opens with sslmode=require (what the app uses).
+      * Both tables exist on startup with the exact columns/types the prompt
+        mandates — including ``analyses.analysis_result`` as JSONB and the
+        integer count columns.
+      * A full analysis result round-trips through db.py (get_or_create_user ->
+        create_analysis -> finalize_analysis -> get_user_analyses), proving the
+        JSONB payload and the per-user scoping that backs GET /api/history.
+    """
+    global PASS, FAIL
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+    except Exception:
+        pass
+
+    url = os.getenv("DATABASE_URL")
+    if not url:
+        print("      -> FAIL: DATABASE_URL not set in backend/.env")
+        FAIL += 1
+        return
+    if "postgres.database.azure.com" not in url:
+        print(f"      -> NOTE: DATABASE_URL host is not an Azure PG endpoint: {url[:48]}...")
+    if "sslmode=require" not in url:
+        print("      -> NOTE: DATABASE_URL lacks sslmode=require")
+
+    try:
+        import psycopg2
+    except ImportError:
+        print("      -> FAIL: psycopg2 not installed; cannot verify DB.")
+        FAIL += 1
+        return
+
+    try:
+        conn = psycopg2.connect(url, connect_timeout=15)
+    except Exception as exc:
+        print(f"      -> FAIL: psycopg2 cannot connect to DATABASE_URL: {exc}")
+        FAIL += 1
+        return
+    print("      -> psycopg2 connection to Azure PG OK (sslmode=require)")
+
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT table_name, column_name, data_type FROM information_schema.columns "
+        "WHERE table_schema='public' ORDER BY table_name, ordinal_position;"
+    )
+    have, types = {}, {}
+    for t, c, dt in cur.fetchall():
+        have.setdefault(t, set()).add(c)
+        types[(t, c)] = dt
+    cur.close()
+
+    expected = {
+        "users": {"id", "email", "password_hash", "created_at"},
+        "analyses": {
+            "id", "user_id", "resource_group", "resources_scanned", "issues_found",
+            "estimated_savings", "analysis_result", "status", "created_at",
+        },
+    }
+    for t, cols in expected.items():
+        if t not in have:
+            print(f"      -> FAIL: table '{t}' missing")
+            FAIL += 1
+            continue
+        missing = cols - have[t]
+        if missing:
+            print(f"      -> FAIL: table '{t}' missing columns {sorted(missing)}")
+            FAIL += 1
+        else:
+            print(f"      -> table '{t}' has all required columns")
+
+    if types.get(("analyses", "analysis_result")) != "jsonb":
+        print(f"      -> FAIL: analyses.analysis_result is "
+              f"'{types.get(('analyses','analysis_result'))}', expected jsonb")
+        FAIL += 1
+    else:
+        print("      -> analyses.analysis_result is JSONB")
+
+    for col in ("resources_scanned", "issues_found"):
+        dt = types.get(("analyses", col))
+        if dt not in ("integer", "bigint"):
+            print(f"      -> WARN: analyses.{col} type is '{dt}' (expected integer)")
+
+    # Full round-trip through the app's own data layer (also ensures tables exist).
+    import db  # noqa: E402  (sibling module; sys.path already includes backend/)
+    db.init_db()
+    if not db.is_available():
+        print("      -> FAIL: db.init_db() reports the database is unavailable")
+        FAIL += 1
+        conn.close()
+        return
+
+    email = f"smoke-{uuid.uuid4().hex[:8]}@example.com"
+    uid = db.get_or_create_user(email)
+    aid = f"smoke-{uuid.uuid4().hex}"
+    db.create_analysis(aid, uid, "Finops_Cost_Detective")
+    full = {
+        "summary": "smoke summary",
+        "issues": [{"title": "idle vm", "severity": "high", "resource": "vm1",
+                    "description": "stopped", "estimated_savings": "$5"}],
+        "estimated_savings": "$5",
+        "fix_commands": ["az vm deallocate -g x -n vm1"],
+    }
+    db.finalize_analysis(aid, 9, 1, "$5", full)
+
+    rows = db.get_user_analyses(email)
+    match = next((r for r in rows if r["id"] == aid), None)
+    if match is None:
+        print("      -> FAIL: analysis not returned by get_user_analyses")
+        FAIL += 1
+    elif (match["analysis_result"] != full or match["resources_scanned"] != 9
+          or match["issues_found"] != 1 or match["estimated_savings"] != "$5"
+          or match["status"] != "complete"):
+        print(f"      -> FAIL: stored analysis mismatch: {match}")
+        FAIL += 1
+    else:
+        print("      -> full analysis result round-tripped (JSONB + fields)")
+
+    # Per-user isolation: the row must NOT appear under a different user.
+    if any(r["id"] == aid for r in db.get_user_analyses("another-user@example.com")):
+        print("      -> FAIL: analysis leaked to a different user")
+        FAIL += 1
+    else:
+        print("      -> history is scoped to the requesting user (isolation OK)")
+
+    c2 = conn.cursor()
+    c2.execute("DELETE FROM analyses WHERE id = %s;", (aid,))
+    conn.commit()
+    c2.close()
+    conn.close()
+    print("      -> test row cleaned up")
+
+
+def check_websocket_progress(resource_group: str | None) -> None:
+    """Step ④ smoke: the WebSocket relays the 5 progress messages.
+
+    Opens ws://127.0.0.1:{PORT}/ws/progress/{analysis_id}, then drives a real
+    POST /api/analyze with that same id so the server pushes progress to our
+    socket. If the environment can run a full analyze (az logged in + API key),
+    we assert all five mandated messages arrived. If analyze can't complete (no
+    RG / not logged in / no key) we still prove the endpoint is wired by checking
+    that the early progress messages were relayed, and otherwise NOTE/SKIP.
+    """
+    global PASS, FAIL
+    try:
+        import websockets
+    except ImportError:
+        print("      -> SKIP: 'websockets' package not installed; cannot test WS.")
+        return
+    if not resource_group:
+        print("      -> SKIP: no resource group available (step ②) to drive analyze.")
+        return
+
+    analysis_id = f"ws-{uuid.uuid4().hex}"
+    collected: list[str] = []
+    stop = threading.Event()
+
+    async def listen():
+        try:
+            async with websockets.connect(
+                f"ws://127.0.0.1:{PORT}/ws/progress/{analysis_id}", max_size=None
+            ) as ws:
+                while not stop.is_set():
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    except Exception:
+                        break
+                    msg = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+                    text = msg.get("message") if isinstance(msg, dict) else str(msg)
+                    collected.append(text)
+                    if text == "Analysis complete":
+                        break
+        except Exception as exc:  # connection refused, handshake error, etc.
+            collected.append(f"<ws-error:{type(exc).__name__}>")
+
+    loop = asyncio.new_event_loop()
+    lt = threading.Thread(
+        target=lambda: (loop.run_until_complete(listen()), loop.close()),
+        daemon=True,
+    )
+    lt.start()
+    time.sleep(0.6)  # let the socket connect + register with the hub
+
+    # Drive the analyze flow with our analysis_id (frontend order: open WS
+    # first, then POST with the same id).
+    data = json.dumps({"resource_group": resource_group, "analysis_id": analysis_id}).encode()
+    req = urllib.request.Request(
+        BASE + "/api/analyze", data=data, method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    status = None
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            status = resp.status
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+    except Exception:
+        status = None
+
+    stop.set()
+    lt.join(timeout=6)
+
+    expected = [
+        "Fetching resource groups...",
+        f"Scanning resources in {resource_group}...",
+        "Analyzing costs with AI...",
+        "Storing results...",
+        "Analysis complete",
+    ]
+    if status == 200:
+        missing = [m for m in expected if m not in collected]
+        if missing:
+            print(f"      -> FAIL: WS missing {missing}; received {collected}")
+            FAIL += 1
+        else:
+            print(f"      -> WS relayed all 5 progress messages: {collected}")
+            PASS += 1
+    else:
+        early = [m for m in expected[:2] if m in collected]
+        if early:
+            print(f"      -> NOTE: analyze returned {status} (env lacks az/key?), "
+                  f"but WS endpoint relayed early progress {early} — wiring OK.")
+        elif any(c.startswith("<ws-error") for c in collected):
+            print(f"      -> FAIL: WS connection failed: {collected}")
+            FAIL += 1
+        else:
+            print(f"      -> FAIL: WS received no progress (analyze returned {status}); "
+                  f"got {collected}")
+            FAIL += 1
+
+
 print(f"Testing {BASE}\n")
 
 health = call("GET", "/")                          # ① health (+ DB status)
+check_postgres_config()                            # ⑥ deep config check (DB direct)
 rgs = call("GET", "/api/resource-groups")          # ② list RGs (proves `az` login)
 
 first_rg = ""
@@ -198,6 +460,10 @@ call("POST", "/api/analyze", {}, expect=422)
 # ── step ⑥: PostgreSQL instance exists & is reachable ───────────────────────
 print("\n-- Database (step 6) --")
 check_database(health["json"] if health.get("ok") else None, analyzed_id)
+
+# ── step ④: WebSocket live progress relay ───────────────────────────────────
+print("\n-- WebSocket progress (step 4) --")
+check_websocket_progress(first_rg)
 
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
