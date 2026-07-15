@@ -253,7 +253,4 @@ python test_api.py
 
 ---
 
-## License
 
-This project is provided as-is without a license. Add a `LICENSE` file if you
-intend to distribute it.
