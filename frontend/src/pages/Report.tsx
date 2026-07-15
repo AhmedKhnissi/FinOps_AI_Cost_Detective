@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router-dom";
 import type { Analysis, HistoryEntry, Issue, Severity } from "../lib/types";
 import type { AnalyzeResponse } from "../lib/api";
+import StatCard from "../components/StatCard";
+import SeverityDonut from "../components/SeverityDonut";
 
 // ── Display helpers ───────────────────────────────────────────────────────────
 
 const SEVERITY_STYLES: Record<Severity, string> = {
-  high: "bg-red-500/15 text-red-300 border-red-500/40",
-  medium: "bg-yellow-500/15 text-yellow-300 border-yellow-500/40",
-  low: "bg-green-500/15 text-green-300 border-green-500/40",
+  high: "border-danger/40 bg-danger/15 text-danger",
+  medium: "border-warn/40 bg-warn/15 text-warn",
+  low: "border-ok/40 bg-ok/15 text-ok",
 };
 
 type IssueType = "over-provisioned" | "unused" | "misconfigured" | "optimization";
@@ -49,15 +51,13 @@ function matchCommand(issue: Issue, commands: string[]): string | null {
 
 function SeverityBadge({ severity }: { severity: Severity }) {
   return (
-    <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${SEVERITY_STYLES[severity]}`}>
-      {severity}
-    </span>
+    <span className={`chip capitalize ${SEVERITY_STYLES[severity]}`}>{severity}</span>
   );
 }
 
 function TypeBadge({ type }: { type: IssueType }) {
   return (
-    <span className="rounded-full border border-indigo-500/40 bg-indigo-500/10 px-2 py-0.5 text-xs font-medium capitalize text-indigo-300">
+    <span className="chip border-brand/40 bg-brand/10 text-brand">
       {type.replace("-", " ")}
     </span>
   );
@@ -75,25 +75,16 @@ function CodeBlock({ code }: { code: string }) {
     }
   }
   return (
-    <div className="relative rounded-lg border border-ink-500 bg-ink-900">
+    <div className="relative rounded-xl border border-ink-500 bg-ink-900">
       <button
         onClick={copy}
-        className="absolute right-2 top-2 rounded border border-ink-500 bg-ink-700 px-2 py-1 text-xs text-slate-300 hover:bg-ink-600"
+        className="absolute right-2 top-2 rounded-lg border border-ink-500 bg-ink-700 px-2 py-1 text-xs text-slate-300 transition hover:bg-ink-600"
       >
         {copied ? "Copied!" : "Copy"}
       </button>
-      <pre className="overflow-x-auto p-3 pr-16 text-xs leading-relaxed text-emerald-200">
+      <pre className="overflow-x-auto p-3 pr-16 text-xs leading-relaxed text-ok">
         <code>{code}</code>
       </pre>
-    </div>
-  );
-}
-
-function Stat({ label, value, accent }: { label: string; value: string | number; accent?: boolean }) {
-  return (
-    <div className={`card p-4 ${accent ? "border-emerald-500/30 bg-emerald-500/5" : ""}`}>
-      <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
-      <p className={`mt-1 text-2xl font-bold ${accent ? "text-emerald-300" : "text-slate-100"}`}>{value}</p>
     </div>
   );
 }
@@ -102,12 +93,10 @@ function IssueCard({ issue, commands }: { issue: Issue; commands: string[] }) {
   const type = categorizeIssue(issue);
   const command = matchCommand(issue, commands);
   return (
-    <div className="card p-4">
-      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <SeverityBadge severity={issue.severity} />
-          <TypeBadge type={type} />
-        </div>
+    <div className="card p-5 transition hover:border-brand/30">
+      <div className="mb-3 flex flex-wrap items-start gap-2">
+        <SeverityBadge severity={issue.severity} />
+        <TypeBadge type={type} />
       </div>
 
       <h4 className="font-semibold text-slate-100">{issue.title}</h4>
@@ -121,14 +110,16 @@ function IssueCard({ issue, commands }: { issue: Issue; commands: string[] }) {
       <p className="mt-2 text-sm leading-relaxed text-slate-300">{issue.description}</p>
 
       {issue.estimated_savings && (
-        <p className="mt-2 text-sm font-medium text-emerald-300">
+        <p className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-ok/30 bg-ok/10 px-2.5 py-1 text-sm font-semibold text-ok">
           Est. savings: {issue.estimated_savings}
         </p>
       )}
 
       {command && (
         <div className="mt-3">
-          <p className="mb-1 text-xs uppercase tracking-wide text-slate-500">Suggested fix</p>
+          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Suggested fix
+          </p>
           <CodeBlock code={command} />
         </div>
       )}
@@ -144,6 +135,10 @@ interface ReportView {
   createdAt?: string;
   analysis: Analysis | null;
   estimatedSavings?: string | null;
+}
+
+function IconBox({ children }: { children: ReactNode }) {
+  return <span className="grid h-4 w-4 place-items-center">{children}</span>;
 }
 
 export default function Report() {
@@ -175,7 +170,7 @@ export default function Report() {
     return (
       <div className="card p-8 text-center">
         <p className="text-slate-300">No report to display.</p>
-        <Link to="/" className="mt-3 inline-block text-brand hover:underline">
+        <Link to="/dashboard" className="mt-3 inline-block font-semibold text-brand hover:underline">
           Run a new analysis
         </Link>
       </div>
@@ -191,7 +186,7 @@ export default function Report() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">Analysis Report</h1>
+          <h1 className="text-2xl font-bold text-white">Analysis Report</h1>
           <p className="text-sm text-slate-400">
             Resource group: <span className="font-mono text-slate-200">{view.resourceGroup}</span>
           </p>
@@ -203,28 +198,49 @@ export default function Report() {
         )}
       </div>
 
-      {/* Summary card: resources scanned, issues found, estimated savings */}
-      <section className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Resources scanned" value={view.resourceCount ?? 0} />
-        <Stat label="Issues found" value={issues.length} />
-        <Stat label="Est. monthly savings" value={savings ?? "—"} accent />
+      {/* Summary: stats + severity donut */}
+      <section className="grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2 grid gap-4 sm:grid-cols-3">
+          <StatCard
+            icon={<IconBox>▣</IconBox>}
+            label="Resources scanned"
+            value={view.resourceCount ?? 0}
+          />
+          <StatCard
+            icon={<IconBox>⚠</IconBox>}
+            label="Issues found"
+            value={issues.length}
+          />
+          <StatCard
+            icon={<IconBox>$</IconBox>}
+            label="Est. monthly savings"
+            value={savings ?? "—"}
+            accent
+          />
+        </div>
+        <div className="card flex items-center justify-center p-5">
+          <SeverityDonut issues={issues} />
+        </div>
       </section>
 
       <section>
-        <h2 className="mb-2 text-lg font-semibold">Summary</h2>
-        <div className="card p-4 text-sm leading-relaxed text-slate-300">
+        <h2 className="mb-2 text-lg font-semibold text-slate-100">Summary</h2>
+        <div className="card p-5 text-sm leading-relaxed text-slate-300">
           {analysis?.summary ?? "No summary available."}
         </div>
       </section>
 
       <section>
-        <h2 className="mb-2 text-lg font-semibold">
+        <h2 className="mb-2 text-lg font-semibold text-slate-100">
           Issues <span className="text-slate-500">({issues.length})</span>
         </h2>
         {issues.length === 0 ? (
-          <div className="card p-4 text-sm text-slate-400">No issues found. 🎉</div>
+          <div className="card flex flex-col items-center gap-2 p-10 text-center text-slate-400">
+            <span className="text-3xl">🎉</span>
+            <p>No issues found. Your resource group looks lean.</p>
+          </div>
         ) : (
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-2">
             {issues.map((issue, i) => (
               <IssueCard key={i} issue={issue} commands={commands} />
             ))}
@@ -234,7 +250,7 @@ export default function Report() {
 
       {commands.length > 0 && (
         <section>
-          <h2 className="mb-2 text-lg font-semibold">All fix commands</h2>
+          <h2 className="mb-2 text-lg font-semibold text-slate-100">All fix commands</h2>
           <div className="space-y-2">
             {commands.map((cmd, i) => (
               <CodeBlock key={i} code={cmd} />

@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { isAuthenticated } from "./lib/auth";
 import Navbar from "./components/Navbar";
+import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Dashboard from "./pages/Dashboard";
@@ -19,17 +20,18 @@ function RequireAuth({ children }: { children: JSX.Element }) {
 
 // Keep already-authenticated users out of the auth pages.
 function PublicOnly({ children }: { children: JSX.Element }) {
-  if (isAuthenticated()) return <Navigate to="/" replace />;
+  if (isAuthenticated()) return <Navigate to="/dashboard" replace />;
   return <div className="flex min-h-screen items-center justify-center px-4">{children}</div>;
 }
 
 export default function App() {
   return (
     <Routes>
+      <Route path="/" element={<Landing />} />
       <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
       <Route path="/signup" element={<PublicOnly><Signup /></PublicOnly>} />
 
-      <Route path="/" element={<RequireAuth><Dashboard /></RequireAuth>} />
+      <Route path="/dashboard" element={<RequireAuth><Dashboard /></RequireAuth>} />
       <Route path="/history" element={<RequireAuth><History /></RequireAuth>} />
       <Route path="/report" element={<RequireAuth><Report /></RequireAuth>} />
 

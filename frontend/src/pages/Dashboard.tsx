@@ -9,10 +9,13 @@ import {
   type ProgressSocket,
 } from "../lib/api";
 import type { ResourceGroup } from "../lib/types";
+import { getEmail } from "../lib/auth";
 import ProgressTracker from "../components/ProgressTracker";
+import { Logo } from "../components/Logo";
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const email = getEmail();
   const [groups, setGroups] = useState<ResourceGroup[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [loadingGroups, setLoadingGroups] = useState(true);
@@ -76,48 +79,78 @@ export default function Dashboard() {
     }
   }
 
+  const firstName = email ? email.split("@")[0] : "there";
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Dashboard</h1>
-        <p className="text-sm text-slate-400">
-          Pick an Azure resource group and run an AI cost analysis.
-        </p>
+      {/* Hero */}
+      <div className="relative overflow-hidden rounded-2xl border border-white/5 bg-ink-800/70 p-6 shadow-card">
+        <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-brand/15 blur-3xl" />
+        <div className="relative flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-sm text-slate-400">Welcome back,</p>
+            <h1 className="text-2xl font-bold text-white">{firstName}</h1>
+            <p className="mt-1 text-sm text-slate-400">
+              Pick an Azure resource group and run an AI cost analysis.
+            </p>
+          </div>
+          <div className="flex items-center gap-3 rounded-xl border border-white/5 bg-ink-900/50 px-4 py-3">
+            <Logo size={28} />
+            <div className="text-xs">
+              <p className="font-medium text-slate-200">Ready to scan</p>
+              <p className="text-slate-500">{groups.length} resource groups</p>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <div className="card p-5">
+      {/* Picker */}
+      <div className="card p-6">
         <label className="label" htmlFor="rg">Resource group</label>
         {loadingGroups ? (
-          <p className="text-sm text-slate-500">Loading resource groups…</p>
+          <div className="flex items-center gap-3 text-sm text-slate-500">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-brand border-t-transparent" />
+            Loading resource groups…
+          </div>
         ) : groupError ? (
-          <p className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger">
             {groupError}
           </p>
         ) : groups.length === 0 ? (
           <p className="text-sm text-slate-500">No resource groups found in your subscription.</p>
         ) : (
-          <select
-            id="rg"
-            className="input"
-            value={selected}
-            onChange={(e) => setSelected(e.target.value)}
-          >
-            {groups.map((g) => (
-              <option key={g.name} value={g.name}>
-                {g.name}
-                {g.location ? ` — ${g.location}` : ""}
-              </option>
-            ))}
-          </select>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+            <select
+              id="rg"
+              className="input sm:max-w-md"
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+            >
+              {groups.map((g) => (
+                <option key={g.name} value={g.name}>
+                  {g.name}
+                  {g.location ? ` — ${g.location}` : ""}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={handleRun}
+              className="btn-primary px-6 py-3 sm:w-auto"
+              disabled={running || !selected || loadingGroups}
+            >
+              {running ? (
+                <>
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-ink-900 border-t-transparent" />
+                  Running…
+                </>
+              ) : (
+                <>
+                  <Logo size={18} /> Run Analysis
+                </>
+              )}
+            </button>
+          </div>
         )}
-
-        <button
-          onClick={handleRun}
-          className="btn-primary mt-4"
-          disabled={running || !selected || loadingGroups}
-        >
-          {running ? "Running…" : "Run Analysis"}
-        </button>
       </div>
 
       <ProgressTracker messages={messages} running={running} done={done} error={runError} />

@@ -11,35 +11,87 @@
 
   body {
     @apply bg-ink-900 text-slate-100 antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::selection {
+    @apply bg-brand/30 text-white;
+  }
+
+  /* Slim, on-brand scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #27354b transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-ink-500;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-600;
   }
 }
 
 @layer components {
   .card {
-    @apply rounded-xl border border-ink-500 bg-ink-800 shadow-lg shadow-black/30;
+    @apply rounded-2xl border border-white/5 bg-ink-800/80 shadow-card backdrop-blur;
+  }
+
+  .glass {
+    @apply rounded-2xl border border-white/10 bg-white/5 shadow-card backdrop-blur-xl;
   }
 
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2
-           text-sm font-semibold transition-colors disabled:cursor-not-allowed
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5
+           text-sm font-semibold transition-all disabled:cursor-not-allowed
            disabled:opacity-50;
   }
 
   .btn-primary {
-    @apply btn bg-brand text-ink-900 hover:bg-brand-soft;
+    @apply btn bg-brand-gradient text-ink-900 shadow-glow-soft
+           hover:brightness-110 hover:shadow-glow active:scale-[0.98];
   }
 
   .btn-ghost {
-    @apply btn border border-ink-500 bg-ink-700 text-slate-200 hover:bg-ink-600;
+    @apply btn border border-ink-500 bg-ink-700/60 text-slate-200
+           hover:border-brand/50 hover:bg-ink-600;
+  }
+
+  .btn-outline {
+    @apply btn border border-brand/40 bg-brand/5 text-brand
+           hover:bg-brand/10;
   }
 
   .input {
-    @apply w-full rounded-lg border border-ink-500 bg-ink-900 px-3 py-2 text-sm
-           text-slate-100 placeholder-slate-500 outline-none
-           focus:border-brand focus:ring-1 focus:ring-brand;
+    @apply w-full rounded-xl border border-ink-500 bg-ink-900/70 px-3.5 py-2.5 text-sm
+           text-slate-100 placeholder-slate-500 outline-none transition
+           focus:border-brand focus:ring-4 focus:ring-brand/15;
   }
 
   .label {
-    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400;
+    @apply mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5
+           text-xs font-medium;
+  }
+
+  .gradient-text {
+    @apply bg-brand-gradient bg-clip-text text-transparent;
+  }
+
+  .aurora-bg {
+    @apply bg-ink-900;
+    background-image: theme("backgroundImage.aurora");
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
   }
 }
